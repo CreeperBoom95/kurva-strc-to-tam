@@ -1,0 +1,195 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kurva strč to tam | My Cloud</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1020;color:#f4f6ff;font-family:Arial,sans-serif}
+header{padding:22px 7%;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #242d43}
+.logo{font-size:21px;font-weight:bold;color:#82aaff}
+main{max-width:1000px;margin:45px auto;padding:20px}
+h1{font-size:34px}
+.muted{color:#929db6}
+.panel{background:#151e32;border:1px solid #293650;border-radius:17px;padding:24px;margin:20px 0}
+input,button{padding:13px;border-radius:9px;border:1px solid #34425e;font-size:15px}
+input{background:#0d1527;color:white;width:100%;margin:8px 0}
+button{background:#5685ff;color:white;border:0;cursor:pointer;font-weight:bold}
+button:hover{opacity:.85}
+.file{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid #293650;overflow-wrap:anywhere}
+.file button{padding:8px 12px;margin-left:5px}
+#app{display:none}
+#message{color:#9db8ff;min-height:24px}
+.small{font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">☁ Kurva strč to tam</div>
+  <button id="logout" style="display:none">Log out</button>
+</header>
+<main>
+  <section id="auth" class="panel">
+    <h1>Your private cloud.</h1>
+    <p class="muted">Sign in or create your account.</p>
+    <input id="email" type="email" placeholder="Email address">
+    <input id="password" type="password" placeholder="Password">
+    <button id="login">Sign in</button>
+    <button id="signup" style="background:#293b60">Create account</button>
+    <p id="message"></p>
+  </section>
+
+  <section id="app">
+    <h1>My files ☁</h1>
+    <p class="muted">Welcome to your private storage.</p>
+    <div class="panel">
+      <h2>Upload a file</h2>
+      <input id="fileInput" type="file">
+      <button id="upload">Upload file</button>
+      <p class="small muted">Your files are private to your account.</p>
+    </div>
+    <div class="panel">
+      <h2>My storage</h2>
+      <h1 id="usage">Calculating...</h1>
+      <p class="muted small">1 TB is our target capacity, not your current free quota.</p>
+    </div>
+    <div class="panel">
+      <h2>My files</h2>
+      <div id="files">Loading files...</div>
+    </div>
+    <p id="status" class="muted"></p>
+  </section>
+</main>
+
+<script>
+const SUPABASE_URL = "PASTE_YOUR_PROJECT_URL";
+const SUPABASE_KEY = "PASTE_YOUR_PUBLISHABLE_KEY";
+const BUCKET = "files";
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let currentUser = null;
+
+const el = id => document.getElementById(id);
+const say = message => el("status").textContent = message;
+
+function showApp(user) {
+  currentUser = user;
+  el("auth").style.display = user ? "none" : "block";
+  el("app").style.display = user ? "block" : "none";
+  el("logout").style.display = user ? "block" : "none";
+  if(user) loadFiles();
+}
+
+el("login").onclick = async () => {
+  const {error} = await db.auth.signInWithPassword({
+    email: el("email").value,
+    password: el("password").value
+  });
+  el("message").textContent = error ? error.message : "Signed in!";
+};
+
+el("signup").onclick = async () => {
+  const {error} = await db.auth.signUp({
+    email: el("email").value,
+    password: el("password").value
+  });
+  el("message").textContent = error
+    ? error.message
+    : "Account created! Check your email if confirmation is enabled.";
+};
+
+el("logout").onclick = async () => {
+  await db.auth.signOut();
+};
+
+el("upload").onclick = async () => {
+  const file = el("fileInput").files[0];
+  if(!file || !currentUser) return say("Choose a file first.");
+
+  say("Uploading...");
+  const path = `${currentUser.id}/${file.name}`;
+
+  const {error} = await db.storage.from(BUCKET).upload(path,file,{
+    upsert:true
+  });
+
+  if(error) return say(error.message);
+  el("fileInput").value = "";
+  say("Upload complete!");
+  loadFiles();
+};
+
+async function loadFiles() {
+  if(!currentUser) return;
+
+  const {data,error} = await db.storage.from(BUCKET).list(
+    currentUser.id,
+    {limit:100,sortBy:{column:"name",order:"asc"}}
+  );
+
+  if(error) {
+    el("files").textContent = error.message;
+    return;
+  }
+
+  let total = 0;
+  el("files").replaceChildren();
+
+  for(const file of data || []) {
+    total += file.metadata?.size || 0;
+
+    const row = document.createElement("div");
+    row.className = "file";
+
+    const name = document.createElement("span");
+    name.textContent = "📄 " + file.name;
+
+    const actions = document.createElement("div");
+    const download = document.createElement("button");
+    download.textContent = "Download";
+    download.onclick = async () => {
+      const {data,error} = await db.storage.from(BUCKET)
+        .download(`${currentUser.id}/${file.name}`);
+      if(error) return say(error.message);
+      const url = URL.createObjectURL(data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const remove = document.createElement("button");
+    remove.textContent = "Delete";
+    remove.style.background = "#9c4055";
+    remove.onclick = async () => {
+      if(!confirm("Delete " + file.name + "?")) return;
+      const {error} = await db.storage.from(BUCKET)
+        .remove([`${currentUser.id}/${file.name}`]);
+      if(error) return say(error.message);
+      say("File deleted.");
+      loadFiles();
+    };
+
+    actions.append(download,remove);
+    row.append(name,actions);
+    el("files").append(row);
+  }
+
+  if(!data?.length) el("files").textContent = "No files yet. Upload your first file!";
+  el("usage").textContent = (total / 1024 / 1024).toFixed(2) + " MB used";
+}
+
+db.auth.onAuthStateChange((_event,session) => {
+  showApp(session?.user || null);
+});
+
+db.auth.getSession().then(({data}) => {
+  showApp(data.session?.user || null);
+});
+</script>
+</body>
+</html>
